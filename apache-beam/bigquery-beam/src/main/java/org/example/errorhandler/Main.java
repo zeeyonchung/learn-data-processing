@@ -1,5 +1,6 @@
 package org.example.errorhandler;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubIO;
 import org.apache.beam.sdk.io.gcp.pubsub.PubsubMessage;
@@ -7,15 +8,16 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.schemas.Schema;
 import org.apache.beam.sdk.transforms.DoFn;
-import org.apache.beam.sdk.transforms.JsonToRow;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.util.RowJson;
 import org.apache.beam.sdk.values.Row;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+
+import static org.apache.beam.sdk.util.RowJsonUtils.newObjectMapperWith;
 
 /**
  * 실행 명령어
@@ -57,7 +59,7 @@ public class Main {
                 .apply("GetPayload",
                         ParDo.of(new DoFn<PubsubMessage, String>() {
                             @ProcessElement
-                            public void processElement(ProcessContext c) throws IOException {
+                            public void processElement(ProcessContext c) {
                                 PubsubMessage message = c.element();
                                 byte[] payload = message.getPayload();
                                 c.output(new String(payload, StandardCharsets.UTF_8));
@@ -65,8 +67,21 @@ public class Main {
                         })
                 )
                 .apply("ParseJson",
-                        JsonToRow.withSchema(schema)
+                        ParDo.of(new DoFn<String, Row>() {
+                            @ProcessElement
+                            public void processElement(ProcessContext c) {
+                                try {
+                                    ObjectMapper objectMapper = newObjectMapperWith(RowJson.RowJsonDeserializer.forSchema(schema));
+                                    String message = c.element();
+                                    Row row = objectMapper.readValue(message, Row.class);
+                                    c.output(row);
+                                } catch (Exception e) {
+                                    LOG.error("expectedException", e);
+                                }
+                            }
+                        })
                 )
+                .setRowSchema(schema)
                 .apply("PrintValue",
                         ParDo.of(new DoFn<Row, Void>() {
                             @ProcessElement
